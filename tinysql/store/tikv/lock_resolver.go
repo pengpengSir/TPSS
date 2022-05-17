@@ -299,7 +299,7 @@ func (lr *LockResolver) getTxnStatus(bo *Backoffer, txnID uint64, primary []byte
 	var req *tikvrpc.Request
 	// build the request
 	// YOUR CODE HERE (lab2). -- Done
-	request := &kvrpcpb.CheckTxnStatusRequest{Context: &kvrpcpb.Context{}, PrimaryKey: primary, LockTs: callerStartTS, CurrentTs: currentTS}
+	request := &kvrpcpb.CheckTxnStatusRequest{Context: &kvrpcpb.Context{}, PrimaryKey: primary, LockTs: txnID, CurrentTs: currentTS}
 	req = tikvrpc.NewRequest(tikvrpc.CmdCheckTxnStatus, request, kvrpcpb.Context{})
 	for {
 		loc, err := lr.store.GetRegionCache().LocateKey(bo, primary)

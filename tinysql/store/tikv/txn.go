@@ -164,12 +164,12 @@ func (txn *tikvTxn) Commit(ctx context.Context) error {
 	}
 	defer txn.close()
 
-	if val, ok := failpoint.Eval(_curpkg_("mockCommitError")); ok {
+	failpoint.Inject("mockCommitError", func(val failpoint.Value) {
 		if val.(bool) && kv.IsMockCommitErrorEnable() {
 			kv.MockCommitErrorDisable()
-			return errors.New("mock commit error")
+			failpoint.Return(errors.New("mock commit error"))
 		}
-	}
+	})
 
 	// connID is used for log.
 	var connID uint64
@@ -188,7 +188,7 @@ func (txn *tikvTxn) Commit(ctx context.Context) error {
 	}
 	if err := committer.initKeysAndMutations(); err != nil {
 		return errors.Trace(err)
-	} // 这里的初始化过程一切正常, 将txn中的keys 和 values 放进committer 的 mutations 里面和 keys里面
+	} // 这里的初始化过程一切正常, 将txn中的keys 和 values 放进committer 的 mutations 里面和 keys里面
 	if len(committer.keys) == 0 {
 		return nil
 	}

@@ -18,18 +18,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"time"
-
 	pb "github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/tidb/kv"
-
-	"github.com/pingcap/tidb/store/tikv/tikvrpc"
+	"github.com/pingcap/tidb/store/tikv/tikvrpc"
 	"github.com/pingcap/tidb/tablecodec"
 	"github.com/pingcap/tidb/util/logutil"
 	"go.uber.org/zap"
+	"strings"
 )
 
 var (
@@ -100,11 +97,11 @@ func (s *tikvSnapshot) get(bo *Backoffer, k kv.Key) ([]byte, error) {
 		}
 	}
 
-	if _, ok := failpoint.Eval(_curpkg_("snapshot-get-cache-fail")); ok {
+	failpoint.Inject("snapshot-get-cache-fail", func(_ failpoint.Value) {
 		if bo.ctx.Value("TestSnapshotCache") != nil {
 			panic("cache miss")
 		}
-	}
+	})
 
 	cli := clientHelper{
 		LockResolver:      s.store.lockResolver,
@@ -149,19 +146,17 @@ func (s *tikvSnapshot) get(bo *Backoffer, k kv.Key) ([]byte, error) {
 			//   1. The transaction is during commit, wait for a while and retry.
 			//   2. The transaction is dead with some locks left, resolve it.
 			// YOUR CODE HERE (lab2).
-			if keyErr.Locked != nil {
-				tmpLock := keyErr.Locked
-				if s.version.Ver < (tmpLock.LockTtl + tmpLock.LockVersion) {
-					time.Sleep(3 * time.Millisecond)
-					s.get(bo, k)
-				} else {
-					locks := make([]*Lock, 0)
-					lock := Lock{Key: k, Primary: tmpLock.PrimaryLock, TxnID: tmpLock.LockVersion, TTL: tmpLock.LockTtl, TxnSize: uint64(len(k)), LockType: pb.Op_Lock}
-					locks = append(locks, &lock)
-					// 这里应该调用ResolveLock
-					s.store.lockResolver.ResolveLocks(bo, tmpLock.LockVersion, locks)
+			lock, err := extractLockFromKeyErr(keyErr)
+			lr := s.store.lockResolver
+			msBeforeExpired, _, err := lr.ResolveLocks(bo, 0, []*Lock{lock})
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if msBeforeExpired > 0 {
+				err = bo.BackoffWithMaxSleep(BoTxnLock, int(msBeforeExpired), errors.Errorf("snapshot get encountered lock: %v", lock))
+				if err != nil {
+					return nil, errors.Trace(err)
 				}
-
 			}
 			continue
 		}
@@ -189,12 +184,12 @@ func extractLockFromKeyErr(keyErr *pb.KeyError) (*Lock, error) {
 }
 
 func extractKeyErr(keyErr *pb.KeyError) error {
-	if val, ok := failpoint.Eval(_curpkg_("ErrMockRetryableOnly")); ok {
+	failpoint.Inject("ErrMockRetryableOnly", func(val failpoint.Value) {
 		if val.(bool) {
 			keyErr.Conflict = nil
 			keyErr.Retryable = "mock retryable error"
 		}
-	}
+	})
 
 	if keyErr.Conflict != nil {
 		return newWriteConflictError(keyErr.Conflict)
